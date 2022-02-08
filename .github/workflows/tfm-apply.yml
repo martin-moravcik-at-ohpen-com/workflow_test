@@ -88,11 +88,16 @@ jobs:
       matrix: ${{ fromJSON(needs.pre-flight.outputs.gh_environments) }}
       fail-fast: false
     steps:
-      
+      - name: Checkout the repository
+        id: checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
       - name: Prepare for the job
         id: job_var_setup
         run: |
           pwd
           ls -l
-        working-directory: ./env/${{ matrix.gh_environments }}
+        working-directory: env/${{ matrix.gh_environments }}
       
