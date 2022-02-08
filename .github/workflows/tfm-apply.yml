@@ -1,0 +1,98 @@
+name: terraform on GitHub event
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Name of the environment which will be handled'
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - acc
+          - prod
+      do_apply:
+        description: 'Do terraform apply?'
+        required: true
+        default: false
+        type: boolean
+  push:
+    paths:
+    - 'env/**'
+env:
+  TFM_VER: 1.1.2
+  
+jobs:
+  pre-flight:
+    name: pre-flight
+    runs-on: ubuntu-latest
+    outputs:
+      gh_environments: ${{ steps.var_setup.outputs.gh_environments }}
+      gh_do_apply: ${{ steps.var_setup.outputs.gh_do_apply }}
+    steps:
+      - name: Checkout the repository
+        id: checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      
+      - name: Find where are changes
+        uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          list-files: shell
+          filters: |
+            environment:
+              - "env/**"
+      
+      - name: Github variables setup
+        id: var_setup
+        run: |
+          set -x
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]
+            then
+              GH_ENVIRONMENTS="{\"gh_environments\":[\"${{ github.event.inputs.environment }}\"]}"
+              echo "::set-output name=gh_environments::${GH_ENVIRONMENTS}"
+              echo "::set-output name=gh_do_apply::${{ github.event.inputs.do_apply }}"
+            else
+              # get all environments (directory names) in which some change appeared
+              ENV_LIST=$( echo "${{steps.changes.outputs.environment_files}}" | tr ' ' '\n' | awk -F/ '{ print $2 }' | sort | uniq )
+              
+              # change occured in templates folder => terraform should run for all existing environments
+              echo "${ENV_LIST}" | grep -q "templates" && ENV_LIST=$(ls -1 env/ | grep -v "^templates$")
+              
+              # constructing variable which contains list of environments for which the terraform should run
+              GH_ENVIRONMENTS="{\"gh_environments\":[]}"
+              for env_item in ${ENV_LIST}
+                do
+                  GH_ENVIRONMENTS=$( echo ${GH_ENVIRONMENTS} | jq -c --arg env_item "$env_item" '.gh_environments += [$env_item]')
+                done
+              echo "${GH_ENVIRONMENTS}"
+              echo "::set-output name=gh_environments::${GH_ENVIRONMENTS}"
+              
+              # setting "gh_do_apply" flag variable depending on the branch name
+              if [ "${GITHUB_REF_NAME}" == "main" ]
+                then
+                  echo "::set-output name=gh_do_apply::true"
+                else
+                  echo "::set-output name=gh_do_apply::false"
+              fi
+          fi
+
+  tfm:
+    name: tfm
+    runs-on: ubuntu-latest
+    needs: pre-flight
+    strategy:
+      matrix: ${{ fromJSON(needs.pre-flight.outputs.gh_environments) }}
+      fail-fast: false
+    steps:
+      
+      - name: Prepare for the job
+        id: job_var_setup
+        run: |
+          pwd
+          ls -l
+        working-directory: ./env/${{ matrix.gh_environments }}
+      
